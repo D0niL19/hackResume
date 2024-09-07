@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+import argparse
 import ast
 from tqdm import tqdm
 import numpy as np
@@ -8,8 +9,8 @@ from transformers import BertTokenizer, BertModel
 from catboost import CatBoostRegressor
 
 
-def infer(file_path):
-    bad_lines = []
+def infer(file_path, output_file):
+    # bad_lines = []
 
     chunksize = 10000
     chunks = pd.read_csv(file_path, chunksize=chunksize, encoding='utf-8', on_bad_lines='skip',
@@ -25,9 +26,9 @@ def infer(file_path):
     print(f"Dataframe shape: {df.shape}")
 
     # Если у вас есть список грязных строк, вы можете сохранить их для анализа
-    with open("problematic_lines.txt", "w", encoding="utf-8") as f:
-        for line in bad_lines:
-            f.write(line)
+    # with open("problematic_lines.txt", "w", encoding="utf-8") as f:
+    #     for line in bad_lines:
+    #         f.write(line)
 
     # Если нужно пропустить строки, не удалось прочитать
     chunks = pd.read_csv(file_path, chunksize=chunksize, encoding='utf-8', on_bad_lines='skip',
@@ -121,8 +122,9 @@ def infer(file_path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Инициализация токенизатора и модели ruBERT
-    tokenizer = BertTokenizer.from_pretrained('DeepPavlov/rubert-base-cased')
-    model = BertModel.from_pretrained('DeepPavlov/rubert-base-cased').to(device)  # Перемещение модели на GPU
+    save_directory = './saved_RUSSIAN_bert_model'
+    tokenizer = BertTokenizer.from_pretrained(save_directory)
+    model = BertModel.from_pretrained(save_directory).to(device)  # Перемещение модели на GPU
     model.eval()  # Установка модели в режим оценки
 
     def get_bert_embeddings(text):
@@ -166,7 +168,7 @@ def infer(file_path):
     model = CatBoostRegressor()
 
     # Загрузка модели
-    model.load_model('catboost_model.cbm')
+    model.load_model('catboost_model_salary.cbm')
 
     # Теперь вы можете использовать модель для предсказаний
     predictions = model.predict(data)
@@ -174,4 +176,16 @@ def infer(file_path):
     predictions_df = pd.DataFrame(predictions, columns=['Predictions'])
 
     # Сохранение предсказаний в CSV-файл
-    predictions_df.to_csv('predictions.csv', index=False)
+    predictions_df.to_csv(output_file, index=False)
+
+def main(input_path, submission_path):
+    infer(input_path, submission_path)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Infer model for salary prediction.')
+    parser.add_argument('input', type=str, help='Path to the input CSV file')
+    parser.add_argument('submission', type=str, help='Path to save the submission or model file')
+
+    args = parser.parse_args()
+
+    main(args.input, args.submission)
