@@ -12,6 +12,8 @@
 pip install -r requirements.txt
 ```
 
+Кроме того необходимо еще скачать веса моделей и разархивировать в папку с проектом
+https://drive.google.com/file/d/11G5UmeeD827z5Ee4yR2wRM7vV5T2aZTF/view?usp=sharing
 
 ## Скрипты
 
@@ -34,6 +36,7 @@ python resume.py path/to/input.csv path/to/submission.csv
 ```bash
 python salary.py path/to/input.csv path/to/output.csv
 ```
+
 
 **Аргументы:**
 - `path/to/input.csv`: Путь к CSV файлу, содержащему данные о профессии и других факторах, влияющих на зарплату.

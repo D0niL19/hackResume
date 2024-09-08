@@ -10,7 +10,7 @@ from catboost import CatBoostRegressor
 
 
 def infer(file_path, output_file):
-    # bad_lines = []
+    bad_lines = []
 
     chunksize = 10000
     chunks = pd.read_csv(file_path, chunksize=chunksize, encoding='utf-8', on_bad_lines='skip',
@@ -26,9 +26,9 @@ def infer(file_path, output_file):
     print(f"Dataframe shape: {df.shape}")
 
     # Если у вас есть список грязных строк, вы можете сохранить их для анализа
-    # with open("problematic_lines.txt", "w", encoding="utf-8") as f:
-    #     for line in bad_lines:
-    #         f.write(line)
+    with open("problematic_lines.txt", "w", encoding="utf-8") as f:
+        for line in bad_lines:
+            f.write(line)
 
     # Если нужно пропустить строки, не удалось прочитать
     chunks = pd.read_csv(file_path, chunksize=chunksize, encoding='utf-8', on_bad_lines='skip',
@@ -44,7 +44,7 @@ def infer(file_path, output_file):
     tqdm.pandas()
 
     # Столбцы по категориям
-    useless = ['id', 'change_time', 'code_external_system', 'company_code', 'contact_person', 'data_ids', 'date_create',
+    usless = ['id', 'change_time', 'code_external_system', 'company_code', 'contact_person', 'data_ids', 'date_create',
               'date_modify', 'deleted', 'publication_period', 'published_date', 'salary_min', 'salary_max', 'salary',
               'state_region_code', 'contactList']
     categories = ['academic_degree', 'bonus_type', 'accommodation_type', 'measure_type', 'busy_type',
@@ -59,14 +59,19 @@ def infer(file_path, output_file):
              'required_certificates', 'retraining_condition', 'social_protected_ids', 'vacancy_name',
              'federalDistrictCode', 'industryBranchName', 'company_name', 'full_company_name']
     keep_as_is = ['required_drive_license']
-    label = pd.to_numeric(df.salary, errors='coerce')
-    # Удаление ненужных столбцов (категория "useless")
-    df = df.drop(columns=useless, errors='ignore')
+
+    # Удаление ненужных столбцов (категория "usless")
+    df = df.drop(columns=usless, errors='ignore')
 
     # Преобразование столбцов категорий nums в float и замена пустых значений на NaN
     for col in tqdm(nums):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Преобразование категориальных признаков в строки
+    for col in categories:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
 
     # Функция для удаления ключа owner_id из словаря
     def clean_dict(dict_str):
@@ -116,15 +121,16 @@ def infer(file_path, output_file):
     for col in license_columns:
         df[col] = df['required_drive_license'].apply(lambda x: 1 if col in parse_license(x) else 0)
 
-    # df = df[nums + categories + ["text_info"] +license_columns]
-    df = df[nums + categories + ["text_info"]]
+    # Объединение всех признаков в один DataFrame
+    df = df[nums + categories + ["text_info"] + license_columns]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    save_directory = 'DeepPavlov/rubert-base-cased'
 
     # Инициализация токенизатора и модели ruBERT
-    save_directory = './saved_RUSSIAN_bert_model'
+    model = BertModel.from_pretrained(save_directory).to(device)
     tokenizer = BertTokenizer.from_pretrained(save_directory)
-    model = BertModel.from_pretrained(save_directory).to(device)  # Перемещение модели на GPU
+
     model.eval()  # Установка модели в режим оценки
 
     def get_bert_embeddings(text):
@@ -135,8 +141,7 @@ def infer(file_path, output_file):
         # Разделяем текст на подстроки
         for i in range(0, len(text), max_length):
             sub_text = text[i:i + max_length]
-            inputs = tokenizer(sub_text, return_tensors='pt', truncation=True, padding=True).to(
-                device)  # Перемещение входных данных на GPU
+            inputs = tokenizer(sub_text, return_tensors='pt', truncation=True, padding=True).to(device)
 
             with torch.no_grad():
                 outputs = model(**inputs)
@@ -150,29 +155,41 @@ def infer(file_path, output_file):
         else:
             return embeddings[0]
 
-    data = df
     # Применяем функцию к столбцу text_info
     tqdm.pandas()
-    data['bert_embeddings'] = data['text_info'].progress_apply(get_bert_embeddings)
-    data['bert_embeddings'] = data['bert_embeddings'].apply(lambda x: x.squeeze())  # Убираем лишние измерения
+    df['bert_embeddings'] = df['text_info'].progress_apply(get_bert_embeddings)
+    df['bert_embeddings'] = df['bert_embeddings'].apply(lambda x: x.squeeze())  # Убираем лишние измерения
+
     # Преобразуем эмбеддинги в DataFrame
-    embeddings_df = pd.DataFrame(data['bert_embeddings'].tolist(), index=data.index)
+    embeddings_df = pd.DataFrame(df['bert_embeddings'].tolist(), index=df.index)
 
     # Объединяем с основными данными
-    data = pd.concat([data, embeddings_df], axis=1)
+    df = pd.concat([df, embeddings_df], axis=1)
 
-    data.columns = [str(col) if isinstance(col, (int, float)) else col for col in data.columns]
-    data = data.drop(columns=['text_info', 'bert_embeddings'])
+    # Удаляем ненужные столбцы
+    df = df.drop(columns=['text_info', 'bert_embeddings'])
 
+    # Преобразование категориальных признаков в строки (повторно, на случай, если что-то изменилось)
+    for col in categories:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
 
+    # Преобразование столбцов категорий nums в float и замена пустых значений на NaN (повторно)
+    for col in nums:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Получаем индексы категориальных признаков
+    cat_feature_indices = [df.columns.get_loc(col) for col in categories if col in df.columns]
+
+    # Загрузка модели CatBoost
     model = CatBoostRegressor()
-
-    # Загрузка модели
     model.load_model('catboost_model_salary.cbm')
 
     # Теперь вы можете использовать модель для предсказаний
-    predictions = model.predict(data)
+    predictions = model.predict(df)
 
+    ## Преобразование предсказаний в DataFrame
     predictions_df = pd.DataFrame(predictions, columns=['Predictions'])
 
     # Сохранение предсказаний в CSV-файл
